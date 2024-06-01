@@ -150,4 +150,4 @@ if uploaded_file is not None:
             )
 
     # Clean up temporary file
-    os.remove(SOURCE_VIDEO_PATH)
+    #os.remove(SOURCE_VIDEO_PATH)
