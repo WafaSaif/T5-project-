@@ -4,5 +4,5 @@ tqdm==4.64.0       # Replace with the latest version compatible with your projec
 ultralytics==8.0.0 # Replace with the specific version you are using, or the latest one
 opencv-python==4.5.5.64
 pafy==0.5.5
-youtube-dl==2021.12.17  # Ensure this is up-to-date, as YouTube regularly updates its API
-supervision==0.1.0      # Replace with the specific version you are using, or the latest one
+yt-dlp==2023.6.22  # Ensure this is up-to-date, as YouTube regularly updates its API
+supervision==0.1.0 # Replace with the specific version you are using, or the latest one

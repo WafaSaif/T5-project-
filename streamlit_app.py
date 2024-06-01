@@ -1,12 +1,17 @@
 import streamlit as st
 import numpy as np
 from collections import defaultdict, deque
-import pafy
 import cv2
 import tempfile
 import os
 from ultralytics import YOLO
 import supervision as sv
+
+# Use yt-dlp as a backend for pafy
+import pafy
+from yt_dlp import YoutubeDL
+
+pafy.set_backend("yt-dlp")
 
 # Set page title and configure page layout
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
