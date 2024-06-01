@@ -12,7 +12,7 @@ import os
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
 
 # Add logo
-#st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
+st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
 
 # Customize the title
 st.title("Sahel - Riyadh Traffic Optimization Solution")
@@ -40,6 +40,11 @@ selected_classes = [0, 1, 2]  # Replace with your desired class IDs
 # Set default values for thickness and text scale
 thickness = 2  # Default line thickness
 text_scale = 0.5  # Smaller text scale
+
+# Initialize metrics for traffic analysis report
+total_vehicles_detected = 0
+speed_sum = 0
+vehicle_speeds = []
 
 # Upload video file
 uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
@@ -81,6 +86,8 @@ if uploaded_file is not None:
 
     # Define callback function for video processing
     def callback(frame: np.ndarray, index: int) -> np.ndarray:
+        global total_vehicles_detected, speed_sum, vehicle_speeds
+
         # Model prediction on a single frame and conversion to supervision Detections
         results = model(frame, imgsz=MODEL_RESOLUTION, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(results)
@@ -108,7 +115,11 @@ if uploaded_file is not None:
                 distance = abs(coordinate_start - coordinate_end)
                 time = len(coordinates[tracker_id]) / video_info.fps
                 speed = distance / time * 3.6  # Convert to km/h
+                vehicle_speeds.append(speed)
                 labels.append(f"#{tracker_id} {class_name} {confidence:.2f} {int(speed)} km/h")
+
+        # Update total vehicle count
+        total_vehicles_detected += len(detections)
 
         # Annotate frame with traces, bounding boxes, and labels
         annotated_frame = trace_annotator.annotate(scene=frame.copy(), detections=detections)
@@ -142,3 +153,18 @@ if uploaded_file is not None:
 
     # Clean up temporary file
     os.remove(SOURCE_VIDEO_PATH)
+
+    # Calculate additional metrics
+    if vehicle_speeds:
+        avg_speed = np.mean(vehicle_speeds)
+        max_speed = np.max(vehicle_speeds)
+        min_speed = np.min(vehicle_speeds)
+    else:
+        avg_speed = max_speed = min_speed = 0
+
+    # Display traffic analysis report
+    st.subheader("Traffic Analysis Report")
+    st.write(f"Total Vehicles Detected: {total_vehicles_detected}")
+    st.write(f"Average Speed: {avg_speed:.2f} km/h")
+    st.write(f"Max Speed: {max_speed:.2f} km/h")
+    st.write(f"Min Speed: {min_speed:.2f} km/h")
