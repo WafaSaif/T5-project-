@@ -7,6 +7,8 @@ from ultralytics import YOLO
 import tempfile
 import cv2
 import os
+import matplotlib.pyplot as plt
+import pandas as pd
 
 # Set page title and configure page layout
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
@@ -43,8 +45,8 @@ text_scale = 0.5  # Smaller text scale
 
 # Initialize metrics for traffic analysis report
 total_vehicles_detected = 0
-speed_sum = 0
 vehicle_speeds = []
+vehicle_counts_by_class = defaultdict(int)
 
 # Upload video file
 uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
@@ -86,7 +88,7 @@ if uploaded_file is not None:
 
     # Define callback function for video processing
     def callback(frame: np.ndarray, index: int) -> np.ndarray:
-        global total_vehicles_detected, speed_sum, vehicle_speeds
+        global total_vehicles_detected, vehicle_speeds, vehicle_counts_by_class
 
         # Model prediction on a single frame and conversion to supervision Detections
         results = model(frame, imgsz=MODEL_RESOLUTION, verbose=False)[0]
@@ -94,6 +96,10 @@ if uploaded_file is not None:
 
         # Only consider class IDs from selected_classes
         detections = detections[np.isin(detections.class_id, selected_classes)]
+
+        # Update vehicle counts by class
+        for class_id in detections.class_id:
+            vehicle_counts_by_class[class_id] += 1
 
         # Tracking detections
         detections = byte_tracker.update_with_detections(detections)
@@ -162,9 +168,34 @@ if uploaded_file is not None:
     else:
         avg_speed = max_speed = min_speed = 0
 
+    # Convert vehicle counts to a pandas DataFrame for charting
+    class_names = [model.model.names[class_id] for class_id in vehicle_counts_by_class.keys()]
+    vehicle_counts_df = pd.DataFrame({
+        'Class': class_names,
+        'Count': list(vehicle_counts_by_class.values())
+    })
+
     # Display traffic analysis report
     st.subheader("Traffic Analysis Report")
     st.write(f"Total Vehicles Detected: {total_vehicles_detected}")
     st.write(f"Average Speed: {avg_speed:.2f} km/h")
     st.write(f"Max Speed: {max_speed:.2f} km/h")
     st.write(f"Min Speed: {min_speed:.2f} km/h")
+
+    # Create and display charts
+    st.subheader("Vehicle Speed Distribution")
+    fig, ax = plt.subplots()
+    ax.hist(vehicle_speeds, bins=20, color='blue', alpha=0.7)
+    ax.set_xlabel('Speed (km/h)')
+    ax.set_ylabel('Frequency')
+    ax.set_title('Distribution of Vehicle Speeds')
+    st.pyplot(fig)
+
+    st.subheader("Vehicle Count by Class")
+    fig, ax = plt.subplots()
+    ax.bar(vehicle_counts_df['Class'], vehicle_counts_df['Count'], color='green', alpha=0.7)
+    ax.set_xlabel('Vehicle Class')
+    ax.set_ylabel('Count')
+    ax.set_title('Number of Vehicles Detected by Class')
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
