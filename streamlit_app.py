@@ -12,7 +12,7 @@ import os
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
 
 # Add logo
-st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
+#st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
 
 # Customize the title
 st.title("Sahel - Riyadh Traffic Optimization Solution")
