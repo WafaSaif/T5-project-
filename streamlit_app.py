@@ -8,8 +8,27 @@ import tempfile
 import cv2
 import os
 
-# Streamlit app
-st.title("YOLOv8 Video Processing App")
+# Set page title and configure page layout
+st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
+
+# Add logo
+st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
+
+# Customize the title
+st.title("Sahel - Riyadh Traffic Optimization Solution")
+
+# Set background color to green and font color to white
+st.markdown(
+    """
+    <style>
+    .css-1vcmnkv { 
+        color: white; 
+        background-color: green;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # Define constants and parameters
 MODEL_NAME = 'yolov8n.pt'  # Replace with the latest YOLOv8 model
