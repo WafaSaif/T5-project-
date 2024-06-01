@@ -1,156 +1,145 @@
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-import time
-import tensorflow as tf
-from absl import app, flags, logging
-from absl.flags import FLAGS
-import core.utils as utils
-from core.yolov4 import filter_boxes
-from core.functions import *
-from tensorflow.python.saved_model import tag_constants
-from PIL import Image
-import cv2
-import numpy as np
-from tensorflow.compat.v1 import ConfigProto, InteractiveSession
 import streamlit as st
+import numpy as np
+from collections import defaultdict, deque
+from tqdm import tqdm
+import supervision as sv
+from ultralytics import YOLO
 import tempfile
-
-# Define flags
-flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
-flags.DEFINE_string('weights', './checkpoints/yolov4-tiny-416', 'path to weights file')
-flags.DEFINE_integer('size', 416, 'resize images to')
-flags.DEFINE_boolean('tiny', True, 'yolo or yolo-tiny')
-flags.DEFINE_string('model', 'yolov4', 'yolov3 or yolov4')
-flags.DEFINE_float('iou', 0.45, 'iou threshold')
-flags.DEFINE_float('score', 0.50, 'score threshold')
-flags.DEFINE_boolean('count', False, 'count objects within video')
-flags.DEFINE_boolean('info', False, 'print info on detections')
-flags.DEFINE_boolean('crop', False, 'crop detections from images')
-flags.DEFINE_boolean('plate', False, 'perform license plate recognition')
+import cv2
+import os
 
 # Set page title and configure page layout
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
+
+# Add logo
+#st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
+
+# Customize the title
 st.title("Sahel - Riyadh Traffic Optimization Solution")
 
-# Sidebar settings
-st.sidebar.title('Custom Object Detection')
-use_webcam = st.sidebar.button('Use Webcam')
-confidence = st.sidebar.slider('Confidence', min_value=0.0, max_value=1.0, value=0.3)
-video_file_buffer = st.sidebar.file_uploader("Upload a video", type=["mp4", "mov", 'avi', 'asf', 'm4v'])
-custom_classes = st.sidebar.checkbox('Use Custom Classes')
+# Set background color to green and font color to white
+st.markdown(
+    """
+    <style>
+    .css-1vcmnkv { 
+        color: white; 
+        background-color: green;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-class_names = utils.read_class_names(cfg.YOLO.CLASSES)
-if custom_classes:
-    assigned_class = st.sidebar.multiselect('Select The Custom Classes', list(class_names.values()), default='car')
+# Define constants and parameters
+MODEL_NAME = 'yolov8n.pt'  # Replace with the latest YOLOv8 model
+MODEL_RESOLUTION = 640  # Resolution for model inference
+CONFIDENCE_THRESHOLD = 0.20  # Adjust this threshold as needed
+IOU_THRESHOLD = 0.5
+selected_classes = [0, 1, 2]  # Replace with your desired class IDs
 
-stop_button = st.sidebar.button('Stop Processing')
-if stop_button:
-    st.stop()
+# Set default values for thickness and text scale
+thickness = 2  # Default line thickness
+text_scale = 0.5  # Smaller text scale
 
-save_video = st.button('Save Results')
-stframe = st.empty()
+# Upload video file
+uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
 
-# TensorFlow session configuration
-config = ConfigProto()
-config.gpu_options.allow_growth = True
-session = InteractiveSession(config=config)
-STRIDES, ANCHORS, NUM_CLASS, XYSCALE = utils.load_config(FLAGS)
-input_size = FLAGS.size
+if uploaded_file is not None:
+    # Create temporary file to save uploaded video
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
 
-# Load the YOLO model
-if FLAGS.framework == 'tflite':
-    interpreter = tf.lite.Interpreter(model_path=FLAGS.weights)
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-else:
-    saved_model_loaded = tf.saved_model.load(FLAGS.weights, tags=[tag_constants.SERVING])
-    infer = saved_model_loaded.signatures['serving_default']
+    SOURCE_VIDEO_PATH = tfile.name
+    TARGET_VIDEO_PATH = 'target_video_1.mp4'
 
-# Define the main processing function
-def process_frame(frame):
-    frame_size = frame.shape[:2]
-    image_data = cv2.resize(frame, (input_size, input_size))
-    image_data = image_data / 255.
-    image_data = image_data[np.newaxis, ...].astype(np.float32)
+    # Create YOLO model instance
+    model = YOLO(MODEL_NAME)
 
-    if FLAGS.framework == 'tflite':
-        interpreter.set_tensor(input_details[0]['index'], image_data)
-        interpreter.invoke()
-        pred = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
-        boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=confidence, input_shape=tf.constant([input_size, input_size]))
-    else:
-        batch_data = tf.constant(image_data)
-        pred_bbox = infer(batch_data)
-        for key, value in pred_bbox.items():
-            boxes = value[:, :, 0:4]
-            pred_conf = value[:, :, 4:]
+    # Create BYTETracker instance
+    byte_tracker = sv.ByteTrack(track_thresh=0.25, track_buffer=30, match_thresh=0.8, frame_rate=30)
 
-    boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
-        boxes=tf.reshape(boxes, (tf.shape(boxes)[0], -1, 1, 4)),
-        scores=tf.reshape(pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
-        max_output_size_per_class=50,
-        max_total_size=50,
-        iou_threshold=FLAGS.iou,
-        score_threshold=confidence
-    )
+    # Create VideoInfo instance
+    video_info = sv.VideoInfo.from_video_path(SOURCE_VIDEO_PATH)
 
-    original_h, original_w, _ = frame.shape
-    bboxes = utils.format_boxes(boxes.numpy()[0], original_h, original_w)
-    pred_bbox = [bboxes, scores.numpy()[0], classes.numpy()[0], valid_detections.numpy()[0]]
-    allowed_classes = assigned_class if custom_classes else list(class_names.values())
-    
-    if FLAGS.crop:
-        crop_objects(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), pred_bbox, os.path.join(os.getcwd(), 'detections', 'crop'), allowed_classes)
-    
-    if FLAGS.count:
-        counted_classes = count_objects(pred_bbox, by_class=False, allowed_classes=allowed_classes)
-        image = utils.draw_bbox(frame, pred_bbox, FLAGS.info, counted_classes, allowed_classes=allowed_classes, read_plate=FLAGS.plate)
-    else:
-        image = utils.draw_bbox(frame, pred_bbox, FLAGS.info, allowed_classes=allowed_classes, read_plate=FLAGS.plate)
-    
-    return image
+    # Create frame generator
+    generator = sv.get_video_frames_generator(SOURCE_VIDEO_PATH)
 
-def main(_argv):
-    tfflie = tempfile.NamedTemporaryFile(delete=False)
-    
-    if not video_file_buffer:
-        vid = cv2.VideoCapture(0) if use_webcam else cv2.VideoCapture(DEMO_VIDEO)
-        tfflie.name = DEMO_VIDEO if not use_webcam else tfflie.name
-    else:
-        tfflie.write(video_file_buffer.read())
-        vid = cv2.VideoCapture(tfflie.name)
+    # Define line for LineZone
+    LINE_START = sv.Point(50, 1500)
+    LINE_END = sv.Point(3840 - 50, 1500)
 
-    width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(vid.get(cv2.CAP_PROP_FPS))
-    codec = cv2.VideoWriter_fourcc(*'VP08')
-    out = cv2.VideoWriter('output.webm', codec, fps, (width, height))
+    # Create LineZone instance
+    line_zone = sv.LineZone(start=LINE_START, end=LINE_END)
 
-    while vid.isOpened():
-        ret, frame = vid.read()
-        if not ret:
-            break
-        frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        processed_frame = process_frame(frame)
-        result = cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR)
-        if save_video:
-            out.write(result)
-        result = cv2.resize(result, (720, int(720 * height / width)))
-        stframe.image(result, channels='BGR', use_column_width=True)
+    # Create annotators
+    box_annotator = sv.BoxAnnotator(thickness=thickness, text_thickness=thickness, text_scale=text_scale)
+    trace_annotator = sv.TraceAnnotator(thickness=thickness, trace_length=video_info.fps * 2)
+    line_zone_annotator = sv.LineZoneAnnotator(thickness=thickness, text_thickness=thickness, text_scale=text_scale)
 
-    st.success('Video saved')
-    st.text('Video is Processed')
-    output_vid = open('output.webm', 'rb')
-    out_bytes = output_vid.read()
-    st.text('OutPut Video')
-    st.video(out_bytes)
-    vid.release()
-    out.release()
+    # Define coordinates for speed calculation
+    coordinates = defaultdict(lambda: deque(maxlen=video_info.fps))
 
-if __name__ == '__main__':
-    try:
-        app.run(main)
-    except SystemExit:
-        pass
+    # Define callback function for video processing
+    def callback(frame: np.ndarray, index: int) -> np.ndarray:
+        # Model prediction on a single frame and conversion to supervision Detections
+        results = model(frame, imgsz=MODEL_RESOLUTION, verbose=False)[0]
+        detections = sv.Detections.from_ultralytics(results)
+
+        # Only consider class IDs from selected_classes
+        detections = detections[np.isin(detections.class_id, selected_classes)]
+
+        # Tracking detections
+        detections = byte_tracker.update_with_detections(detections)
+
+        # Store detection coordinates for speed calculation
+        points = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER)
+        for tracker_id, [_, y] in zip(detections.tracker_id, points):
+            coordinates[tracker_id].append(y)
+
+        # Generate labels and calculate speed if enough data is available
+        labels = []
+        for confidence, class_id, tracker_id in zip(detections.confidence, detections.class_id, detections.tracker_id):
+            class_name = model.model.names[class_id]
+            if len(coordinates[tracker_id]) < video_info.fps / 2:
+                labels.append(f"#{tracker_id} {class_name} {confidence:.2f}")
+            else:
+                coordinate_start = coordinates[tracker_id][-1]
+                coordinate_end = coordinates[tracker_id][0]
+                distance = abs(coordinate_start - coordinate_end)
+                time = len(coordinates[tracker_id]) / video_info.fps
+                speed = distance / time * 3.6  # Convert to km/h
+                labels.append(f"#{tracker_id} {class_name} {confidence:.2f} {int(speed)} km/h")
+
+        # Annotate frame with traces, bounding boxes, and labels
+        annotated_frame = trace_annotator.annotate(scene=frame.copy(), detections=detections)
+        annotated_frame = box_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
+
+        # Update line zone with current detections
+        line_zone.trigger(detections)
+
+        # Annotate frame with line zone results and return
+        return line_zone_annotator.annotate(annotated_frame, line_counter=line_zone)
+
+    # Process the video and save to temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_output:
+        sv.process_video(
+            source_path=SOURCE_VIDEO_PATH,
+            target_path=temp_output.name,
+            callback=callback
+        )
+
+        # Display the processed video
+        st.video(temp_output.name)
+
+        # Option to download the processed video
+        with open(temp_output.name, "rb") as video_file:
+            st.download_button(
+                label="Download Processed Video",
+                data=video_file,
+                file_name="processed_video.mp4",
+                mime="video/mp4"
+            )
+
+    # Clean up temporary file
+    os.remove(SOURCE_VIDEO_PATH)
+
