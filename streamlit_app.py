@@ -22,23 +22,15 @@ selected_classes = [0, 1, 2]  # Replace with your desired class IDs
 thickness = 2  # Default line thickness
 text_scale = 0.5  # Smaller text scale
 
-# Options to upload a video file or use webcam
-source_option = st.selectbox("Select the video source", ("Upload a video file", "Use webcam"))
+# Upload video file
+uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
 
-if source_option == "Upload a video file":
-    uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
-else:
-    uploaded_file = None
+if uploaded_file is not None:
+    # Create temporary file to save uploaded video
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
 
-if uploaded_file is not None or source_option == "Use webcam":
-    # Create temporary file to save uploaded video or use webcam
-    if source_option == "Upload a video file":
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded_file.read())
-        SOURCE_VIDEO_PATH = tfile.name
-    else:
-        SOURCE_VIDEO_PATH = 0  # 0 is the default webcam
-
+    SOURCE_VIDEO_PATH = tfile.name
     TARGET_VIDEO_PATH = 'target_video_1.mp4'
 
     # Create YOLO model instance
@@ -48,7 +40,7 @@ if uploaded_file is not None or source_option == "Use webcam":
     byte_tracker = sv.ByteTrack(track_thresh=0.25, track_buffer=30, match_thresh=0.8, frame_rate=30)
 
     # Create VideoInfo instance
-    video_info = sv.VideoInfo.from_video_path(SOURCE_VIDEO_PATH) if source_option == "Upload a video file" else sv.VideoInfo(30, (640, 480))
+    video_info = sv.VideoInfo.from_video_path(SOURCE_VIDEO_PATH)
 
     # Create frame generator
     generator = sv.get_video_frames_generator(SOURCE_VIDEO_PATH)
@@ -109,7 +101,7 @@ if uploaded_file is not None or source_option == "Use webcam":
         # Annotate frame with line zone results and return
         return line_zone_annotator.annotate(annotated_frame, line_counter=line_zone)
 
-    # Process the video
+    # Process the video and save to temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_output:
         sv.process_video(
             source_path=SOURCE_VIDEO_PATH,
@@ -129,6 +121,5 @@ if uploaded_file is not None or source_option == "Use webcam":
                 mime="video/mp4"
             )
 
-    # Clean up temporary file if created
-    if source_option == "Upload a video file":
-        os.remove(SOURCE_VIDEO_PATH)
+    # Clean up temporary file
+    os.remove(SOURCE_VIDEO_PATH)
