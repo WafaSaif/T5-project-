@@ -1,20 +1,18 @@
 import streamlit as st
 import numpy as np
 from collections import defaultdict, deque
-import cv2
-import tempfile
-import os
-from ultralytics import YOLO
+from tqdm import tqdm
 import supervision as sv
-
-# Use yt-dlp as a backend for pafy
-import pafy
-from yt_dlp import YoutubeDL
-
-pafy.set_backend("yt-dlp")
+from ultralytics import YOLO
+import tempfile
+import cv2
+import os
 
 # Set page title and configure page layout
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
+
+# Add logo
+st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
 
 # Customize the title
 st.title("Sahel - Riyadh Traffic Optimization Solution")
@@ -43,82 +41,104 @@ selected_classes = [0, 1, 2]  # Replace with your desired class IDs
 thickness = 2  # Default line thickness
 text_scale = 0.5  # Smaller text scale
 
-# YouTube live stream URL
-stream_url = 'https://youtu.be/b7lsZ-0KiJw'
+# Upload video file
+uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
 
-# Get video URL from YouTube live stream
-video_pafy = pafy.new(stream_url)
-best = video_pafy.getbest(preftype="mp4")
+if uploaded_file is not None:
+    # Create temporary file to save uploaded video
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
 
-# Create YOLO model instance
-model = YOLO(MODEL_NAME)
+    SOURCE_VIDEO_PATH = tfile.name
+    TARGET_VIDEO_PATH = 'target_video_1.mp4'
 
-# Create BYTETracker instance
-byte_tracker = sv.ByteTrack(track_thresh=0.25, track_buffer=30, match_thresh=0.8, frame_rate=30)
+    # Create YOLO model instance
+    model = YOLO(MODEL_NAME)
 
-# Create VideoCapture instance for live stream
-cap = cv2.VideoCapture(best.url)
+    # Create BYTETracker instance
+    byte_tracker = sv.ByteTrack(track_thresh=0.25, track_buffer=30, match_thresh=0.8, frame_rate=30)
 
-# Create annotators
-box_annotator = sv.BoxAnnotator(thickness=thickness, text_thickness=thickness, text_scale=text_scale)
-trace_annotator = sv.TraceAnnotator(thickness=thickness, trace_length=30 * 2)  # Assuming 30 fps
-line_zone_annotator = sv.LineZoneAnnotator(thickness=thickness, text_thickness=thickness, text_scale=text_scale)
+    # Create VideoInfo instance
+    video_info = sv.VideoInfo.from_video_path(SOURCE_VIDEO_PATH)
 
-# Define coordinates for speed calculation
-coordinates = defaultdict(lambda: deque(maxlen=30))
+    # Create frame generator
+    generator = sv.get_video_frames_generator(SOURCE_VIDEO_PATH)
 
-# Define a line for LineZone (if needed)
-LINE_START = sv.Point(50, 150)
-LINE_END = sv.Point(1280 - 50, 150)
-line_zone = sv.LineZone(start=LINE_START, end=LINE_END)
+    # Define line for LineZone
+    LINE_START = sv.Point(50, 1500)
+    LINE_END = sv.Point(3840 - 50, 1500)
 
-stframe = st.empty()
+    # Create LineZone instance
+    line_zone = sv.LineZone(start=LINE_START, end=LINE_END)
 
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        break
+    # Create annotators
+    box_annotator = sv.BoxAnnotator(thickness=thickness, text_thickness=thickness, text_scale=text_scale)
+    trace_annotator = sv.TraceAnnotator(thickness=thickness, trace_length=video_info.fps * 2)
+    line_zone_annotator = sv.LineZoneAnnotator(thickness=thickness, text_thickness=thickness, text_scale=text_scale)
 
-    # Model prediction on a single frame and conversion to supervision Detections
-    results = model(frame, imgsz=MODEL_RESOLUTION, verbose=False)[0]
-    detections = sv.Detections.from_ultralytics(results)
+    # Define coordinates for speed calculation
+    coordinates = defaultdict(lambda: deque(maxlen=video_info.fps))
 
-    # Only consider class IDs from selected_classes
-    detections = detections[np.isin(detections.class_id, selected_classes)]
+    # Define callback function for video processing
+    def callback(frame: np.ndarray, index: int) -> np.ndarray:
+        # Model prediction on a single frame and conversion to supervision Detections
+        results = model(frame, imgsz=MODEL_RESOLUTION, verbose=False)[0]
+        detections = sv.Detections.from_ultralytics(results)
 
-    # Tracking detections
-    detections = byte_tracker.update_with_detections(detections)
+        # Only consider class IDs from selected_classes
+        detections = detections[np.isin(detections.class_id, selected_classes)]
 
-    # Store detection coordinates for speed calculation
-    points = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER)
-    for tracker_id, [_, y] in zip(detections.tracker_id, points):
-        coordinates[tracker_id].append(y)
+        # Tracking detections
+        detections = byte_tracker.update_with_detections(detections)
 
-    # Generate labels and calculate speed if enough data is available
-    labels = []
-    for confidence, class_id, tracker_id in zip(detections.confidence, detections.class_id, detections.tracker_id):
-        class_name = model.model.names[class_id]
-        if len(coordinates[tracker_id]) < 15:  # Using half of 30 fps for speed calculation
-            labels.append(f"#{tracker_id} {class_name} {confidence:.2f}")
-        else:
-            coordinate_start = coordinates[tracker_id][-1]
-            coordinate_end = coordinates[tracker_id][0]
-            distance = abs(coordinate_start - coordinate_end)
-            time = len(coordinates[tracker_id]) / 30  # Assuming 30 fps
-            speed = distance / time * 3.6  # Convert to km/h
-            labels.append(f"#{tracker_id} {class_name} {confidence:.2f} {int(speed)} km/h")
+        # Store detection coordinates for speed calculation
+        points = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER)
+        for tracker_id, [_, y] in zip(detections.tracker_id, points):
+            coordinates[tracker_id].append(y)
 
-    # Annotate frame with traces, bounding boxes, and labels
-    annotated_frame = trace_annotator.annotate(scene=frame.copy(), detections=detections)
-    annotated_frame = box_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
+        # Generate labels and calculate speed if enough data is available
+        labels = []
+        for confidence, class_id, tracker_id in zip(detections.confidence, detections.class_id, detections.tracker_id):
+            class_name = model.model.names[class_id]
+            if len(coordinates[tracker_id]) < video_info.fps / 2:
+                labels.append(f"#{tracker_id} {class_name} {confidence:.2f}")
+            else:
+                coordinate_start = coordinates[tracker_id][-1]
+                coordinate_end = coordinates[tracker_id][0]
+                distance = abs(coordinate_start - coordinate_end)
+                time = len(coordinates[tracker_id]) / video_info.fps
+                speed = distance / time * 3.6  # Convert to km/h
+                labels.append(f"#{tracker_id} {class_name} {confidence:.2f} {int(speed)} km/h")
 
-    # Update line zone with current detections
-    line_zone.trigger(detections)
+        # Annotate frame with traces, bounding boxes, and labels
+        annotated_frame = trace_annotator.annotate(scene=frame.copy(), detections=detections)
+        annotated_frame = box_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
 
-    # Annotate frame with line zone results
-    annotated_frame = line_zone_annotator.annotate(annotated_frame, line_counter=line_zone)
+        # Update line zone with current detections
+        line_zone.trigger(detections)
 
-    # Display the annotated frame
-    stframe.image(annotated_frame, channels="BGR", use_column_width=True)
+        # Annotate frame with line zone results and return
+        return line_zone_annotator.annotate(annotated_frame, line_counter=line_zone)
 
-cap.release()
+    # Process the video and save to temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_output:
+        sv.process_video(
+            source_path=SOURCE_VIDEO_PATH,
+            target_path=temp_output.name,
+            callback=callback
+        )
+
+        # Display the processed video
+        st.video(temp_output.name)
+
+        # Option to download the processed video
+        with open(temp_output.name, "rb") as video_file:
+            st.download_button(
+                label="Download Processed Video",
+                data=video_file,
+                file_name="processed_video.mp4",
+                mime="video/mp4"
+            )
+
+    # Clean up temporary file
+    os.remove(SOURCE_VIDEO_PATH)
