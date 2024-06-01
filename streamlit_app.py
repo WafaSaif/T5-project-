@@ -12,7 +12,7 @@ import os
 st.set_page_config(page_title="Sahel - Riyadh Traffic Optimization Solution", page_icon="🚗", layout="wide")
 
 # Add logo
-#st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
+# st.image("path_to_your_logo.png", use_column_width=True)  # Replace "path_to_your_logo.png" with the path to your logo image file
 
 # Customize the title
 st.title("Sahel - Riyadh Traffic Optimization Solution")
@@ -128,8 +128,17 @@ if uploaded_file is not None:
             callback=callback
         )
 
-        # Display the processed video
-        st.video(temp_output.name)
+        # Read the processed video
+        cap = cv2.VideoCapture(temp_output.name)
+        stframe = st.empty()
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            stframe.image(frame, channels="BGR", use_column_width=True)
+        
+        cap.release()
 
         # Option to download the processed video
         with open(temp_output.name, "rb") as video_file:
