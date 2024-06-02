@@ -7,6 +7,7 @@ from ultralytics import YOLO
 import tempfile
 import cv2
 import os
+import subprocess
 
 # Set page title and configure page layout
 st.set_page_config(
@@ -108,11 +109,23 @@ if uploaded_file is not None:
                 callback=callback
             )
 
+            # Re-encode the video to ensure compatibility
+            reencoded_video_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+            command = [
+                'ffmpeg',
+                '-i', temp_output.name,
+                '-vcodec', 'libx264',
+                '-crf', '23',
+                '-preset', 'veryfast',
+                reencoded_video_path
+            ]
+            subprocess.run(command, check=True)
+
             # Display the processed video
-            st.video(temp_output.name)
+            st.video(reencoded_video_path)
 
             # Option to download the processed video
-            with open(temp_output.name, "rb") as video_file:
+            with open(reencoded_video_path, "rb") as video_file:
                 st.download_button(
                     label="Download Processed Video",
                     data=video_file,
@@ -124,5 +137,9 @@ if uploaded_file is not None:
         st.error(f"An error occurred: {e}")
 
     finally:
-        # Clean up temporary file
+        # Clean up temporary files
         os.remove(SOURCE_VIDEO_PATH)
+        if os.path.exists(temp_output.name):
+            os.remove(temp_output.name)
+        if os.path.exists(reencoded_video_path):
+            os.remove(reencoded_video_path)
